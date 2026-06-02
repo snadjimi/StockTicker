@@ -1,0 +1,17 @@
+{
+  "name": "stockpulse",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Chrome extension for AI-powered stock research",
+  "scripts": {
+    "build": "esbuild src/popup/App.jsx --bundle --outfile=public/popup.js --loader:.jsx=jsx",
+    "watch": "esbuild src/popup/App.jsx --bundle --outfile=public/popup.js --loader:.jsx=jsx --watch"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  },
+  "dependencies": {
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  }
+}
