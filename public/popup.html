@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=400" />
+    <title>StockPulse</title>
+
+    <!-- Syne: UI text / DM Mono: numbers and prices -->
+    <link
+      href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700&family=DM+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+
+    <style>
+      /* Base reset — gives React a clean slate */
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        width: 400px;
+        min-height: 500px;
+        background: #080c10;
+        color: #e0e0e0;
+        font-family: "Syne", sans-serif;
+        overflow-x: hidden;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- React mounts here -->
+    <div id="root"></div>
+
+    <!-- Bundled by esbuild from src/popup/App.jsx -->
+    <script src="popup.js"></script>
+  </body>
+</html>
