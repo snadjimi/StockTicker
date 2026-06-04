@@ -8,6 +8,7 @@
     "watch": "esbuild src/popup/App.jsx --bundle --outfile=public/popup.js --loader:.jsx=jsx --watch"
   },
   "devDependencies": {
+    "canvas": "^3.2.3",
     "esbuild": "^0.25.0"
   },
   "dependencies": {
