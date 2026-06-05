@@ -2,7 +2,6 @@ import * as cdk from "aws-cdk-lib";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as apigateway from "aws-cdk-lib/aws-apigateway";
-import * as sqs from "aws-cdk-lib/aws-sqs";
 import * as events from "aws-cdk-lib/aws-events";
 import * as targets from "aws-cdk-lib/aws-events-targets";
 import * as ssm from "aws-cdk-lib/aws-ssm";
@@ -34,16 +33,6 @@ export class StockPulseStack extends cdk.Stack {
       sortKey: { name: "signalId", type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
-    });
-
-    // ─── SQS Queue ─────────────────────────────────────────────────────
-    // The orchestrator drops fetch jobs here. Each fetcher (news,
-    // fundamentals, reddit, options) picks up its job and runs.
-
-    const fetchQueue = new sqs.Queue(this, "FetchQueue", {
-      queueName: "stockpulse-fetch-queue",
-      visibilityTimeout: cdk.Duration.seconds(60),
-      retentionPeriod: cdk.Duration.hours(1),
     });
 
     // ─── SSM Parameters (placeholders for API keys) ────────────────────
@@ -84,7 +73,6 @@ export class StockPulseStack extends cdk.Stack {
       environment: {
         BRIEFS_TABLE: briefsTable.tableName,
         SIGNALS_TABLE: signalsTable.tableName,
-        FETCH_QUEUE_URL: fetchQueue.queueUrl,
       },
     };
 
