@@ -143,11 +143,12 @@ export class StockPulseStack extends cdk.Stack {
     briefsTable.grantReadWriteData(orchestrator);
     briefsTable.grantReadWriteData(synthesizer);
     signalsTable.grantReadWriteData(synthesizer);
-    fetchQueue.grantSendMessages(orchestrator);
-    fetchQueue.grantConsumeMessages(newsFetcher);
-    fetchQueue.grantConsumeMessages(fundamentalsFetcher);
-    fetchQueue.grantConsumeMessages(redditFetcher);
-    fetchQueue.grantConsumeMessages(optionsFetcher);
+
+    // The orchestrator invokes the 4 fetchers + synthesizer DIRECTLY
+    // (RequestResponse) rather than via SQS — it needs to wait for results.
+    // So it needs lambda:InvokeFunction on each of them.
+    [newsFetcher, fundamentalsFetcher, redditFetcher, optionsFetcher, synthesizer]
+      .forEach((fn) => fn.grantInvoke(orchestrator));
 
     // Allow all Lambdas to read API keys from SSM
     const ssmPolicy = new cdk.aws_iam.PolicyStatement({
