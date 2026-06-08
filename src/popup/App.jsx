@@ -15,6 +15,16 @@ const colors = {
   textSecondary: "#7A8A9A",
 };
 
+const DASH = "—";
+
+function show(v) {
+  return v === null || v === undefined || v === "" || v === "n/a" ? DASH : v;
+}
+
+function money(v) {
+  return v === null || v === undefined ? DASH : `$${Number(v).toFixed(2)}`;
+}
+
 // ─── Utility components ────────────────────────────────────────────────
 
 function Skeleton({ width = "100%", height = "16px" }) {
@@ -455,7 +465,7 @@ function App() {
                     color: colors.textPrimary,
                   }}
                 >
-                  ${brief.price.toFixed(2)}
+                  {money(brief.price)}
                 </div>
                 <div
                   style={{
@@ -522,10 +532,10 @@ function App() {
 
               {/* Fundamentals card */}
               <Card title="Fundamentals" delay={0.2}>
-                <DataRow label="P/E" value={brief.fundamentals.pe} mono />
-                <DataRow label="EPS" value={`$${brief.fundamentals.eps}`} mono />
-                <DataRow label="Revenue" value={brief.fundamentals.revenueGrowth} mono />
-                <DataRow label="Margin" value={brief.fundamentals.margin} mono />
+                <DataRow label="P/E" value={show(brief.fundamentals.pe)} mono />
+                <DataRow label="EPS" value={money(brief.fundamentals.eps)} mono />
+                <DataRow label="Revenue" value={show(brief.fundamentals.revenueGrowth)} mono />
+                <DataRow label="Margin" value={show(brief.fundamentals.margin)} mono />
               </Card>
 
               {/* Social buzz card */}
@@ -540,12 +550,12 @@ function App() {
 
               {/* Options card */}
               <Card title="Options" delay={0.3}>
-                <DataRow label="C/P Ratio" value={brief.options.callPutRatio} mono />
+                <DataRow label="C/P Ratio" value={show(brief.options.callPutRatio)} mono />
                 <DataRow
                   label="Unusual"
                   value={brief.options.unusualActivity ? "⚡ Yes" : "No"}
                 />
-                <DataRow label="IV" value={brief.options.impliedVolatility} mono />
+                <DataRow label="IV" value={show(brief.options.impliedVolatility)} mono />
               </Card>
             </div>
 
