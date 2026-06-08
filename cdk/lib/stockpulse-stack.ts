@@ -5,15 +5,15 @@ import * as apigateway from "aws-cdk-lib/aws-apigateway";
 import * as events from "aws-cdk-lib/aws-events";
 import * as targets from "aws-cdk-lib/aws-events-targets";
 import * as ssm from "aws-cdk-lib/aws-ssm";
+import * as s3 from "aws-cdk-lib/aws-s3";
+import * as cloudfront from "aws-cdk-lib/aws-cloudfront";
+import * as origins from "aws-cdk-lib/aws-cloudfront-origins";
+import * as s3deploy from "aws-cdk-lib/aws-s3-deployment";
 import { Construct } from "constructs";
 
 export class StockPulseStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
-
-    // ─── DynamoDB Tables ───────────────────────────────────────────────
-    // Briefs table: caches AI-generated stock briefs for 5 minutes
-    // so we don't re-fetch for every popup open.
 
     const briefsTable = new dynamodb.Table(this, "BriefsTable", {
       tableName: "stockpulse-briefs",
@@ -24,9 +24,6 @@ export class StockPulseStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
-    // Signals table: stores sentiment predictions for backtesting.
-    // Each signal records what we predicted and what actually happened.
-
     const signalsTable = new dynamodb.Table(this, "SignalsTable", {
       tableName: "stockpulse-signals",
       partitionKey: { name: "ticker", type: dynamodb.AttributeType.STRING },
@@ -34,10 +31,6 @@ export class StockPulseStack extends cdk.Stack {
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
-
-    // ─── SSM Parameters (placeholders for API keys) ────────────────────
-    // These are empty placeholders. You'll fill them in the AWS console
-    // with your real keys before the Lambdas can work.
 
     new ssm.StringParameter(this, "PolygonApiKey", {
       parameterName: "/stockpulse/POLYGON_API_KEY",
@@ -63,9 +56,6 @@ export class StockPulseStack extends cdk.Stack {
       description: "Reddit API client secret",
     });
 
-    // ─── Lambda Functions ──────────────────────────────────────────────
-    // Shared config for all Lambdas.
-
     const lambdaDefaults = {
       runtime: lambda.Runtime.NODEJS_20_X,
       timeout: cdk.Duration.seconds(30),
@@ -76,16 +66,12 @@ export class StockPulseStack extends cdk.Stack {
       },
     };
 
-    // Orchestrator: receives a ticker, fans out fetch jobs to SQS
-
     const orchestrator = new lambda.Function(this, "Orchestrator", {
       ...lambdaDefaults,
       functionName: "stockpulse-orchestrator",
       handler: "orchestrator.handler",
       code: lambda.Code.fromAsset("../lambdas/orchestrator"),
     });
-
-    // Fetchers: each pulls data from one external source
 
     const newsFetcher = new lambda.Function(this, "NewsFetcher", {
       ...lambdaDefaults,
@@ -115,8 +101,6 @@ export class StockPulseStack extends cdk.Stack {
       code: lambda.Code.fromAsset("../lambdas/options"),
     });
 
-    // Synthesizer: merges all fetched data, calls Claude, returns brief
-
     const synthesizer = new lambda.Function(this, "Synthesizer", {
       ...lambdaDefaults,
       functionName: "stockpulse-synthesizer",
@@ -125,30 +109,37 @@ export class StockPulseStack extends cdk.Stack {
       code: lambda.Code.fromAsset("../lambdas/synthesizer"),
     });
 
-    // ─── Permissions ───────────────────────────────────────────────────
-    // Each resource only gets the access it needs (least privilege).
+    const grader = new lambda.Function(this, "Grader", {
+      ...lambdaDefaults,
+      functionName: "stockpulse-grader",
+      handler: "index.handler",
+      timeout: cdk.Duration.seconds(120),
+      code: lambda.Code.fromAsset("../lambdas/grader"),
+    });
+
+    const stats = new lambda.Function(this, "Stats", {
+      ...lambdaDefaults,
+      functionName: "stockpulse-stats",
+      handler: "index.handler",
+      code: lambda.Code.fromAsset("../lambdas/stats"),
+    });
 
     briefsTable.grantReadWriteData(orchestrator);
     briefsTable.grantReadWriteData(synthesizer);
     signalsTable.grantReadWriteData(synthesizer);
+    signalsTable.grantReadWriteData(grader);
+    signalsTable.grantReadData(stats);
 
-    // The orchestrator invokes the 4 fetchers + synthesizer DIRECTLY
-    // (RequestResponse) rather than via SQS — it needs to wait for results.
-    // So it needs lambda:InvokeFunction on each of them.
     [newsFetcher, fundamentalsFetcher, redditFetcher, optionsFetcher, synthesizer]
       .forEach((fn) => fn.grantInvoke(orchestrator));
 
-    // Allow all Lambdas to read API keys from SSM
     const ssmPolicy = new cdk.aws_iam.PolicyStatement({
       actions: ["ssm:GetParameter"],
       resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter/stockpulse/*`],
     });
 
-    [orchestrator, newsFetcher, fundamentalsFetcher, redditFetcher, optionsFetcher, synthesizer]
+    [orchestrator, newsFetcher, fundamentalsFetcher, redditFetcher, optionsFetcher, synthesizer, grader]
       .forEach((fn) => fn.addToRolePolicy(ssmPolicy));
-
-    // ─── API Gateway ───────────────────────────────────────────────────
-    // The single entry point the Chrome extension talks to.
 
     const api = new apigateway.RestApi(this, "StockPulseApi", {
       restApiName: "StockPulse API",
@@ -159,17 +150,14 @@ export class StockPulseStack extends cdk.Stack {
       },
     });
 
-    // GET /brief/{ticker} → orchestrator
     const briefResource = api.root.addResource("brief").addResource("{ticker}");
     briefResource.addMethod("GET", new apigateway.LambdaIntegration(orchestrator));
 
-    // POST /signal → synthesizer (for logging predictions)
     const signalResource = api.root.addResource("signal");
     signalResource.addMethod("POST", new apigateway.LambdaIntegration(synthesizer));
 
-    // ─── EventBridge (pre-warm cron) ───────────────────────────────────
-    // Every day at 7am EST (12:00 UTC), pre-fetch briefs for top tickers
-    // so users get instant results for popular stocks.
+    const statsResource = api.root.addResource("stats");
+    statsResource.addMethod("GET", new apigateway.LambdaIntegration(stats));
 
     new events.Rule(this, "PreWarmRule", {
       ruleName: "stockpulse-prewarm",
@@ -189,12 +177,45 @@ export class StockPulseStack extends cdk.Stack {
       })],
     });
 
-    // ─── Outputs ───────────────────────────────────────────────────────
-    // After deploy, CDK prints these so you know your API URL.
+    new events.Rule(this, "GraderRule", {
+      ruleName: "stockpulse-grader",
+      schedule: events.Schedule.cron({ minute: "0", hour: "13" }),
+      targets: [new targets.LambdaFunction(grader)],
+    });
+
+    const dashboardBucket = new s3.Bucket(this, "DashboardBucket", {
+      bucketName: `stockpulse-dashboard-${this.account}`,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+      autoDeleteObjects: true,
+    });
+
+    const distribution = new cloudfront.Distribution(this, "DashboardCdn", {
+      defaultRootObject: "index.html",
+      defaultBehavior: {
+        origin: origins.S3BucketOrigin.withOriginAccessControl(dashboardBucket),
+        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+      },
+    });
+
+    new s3deploy.BucketDeployment(this, "DashboardDeployment", {
+      sources: [
+        s3deploy.Source.asset("../dashboard"),
+        s3deploy.Source.jsonData("config.json", { apiUrl: api.url }),
+      ],
+      destinationBucket: dashboardBucket,
+      distribution,
+      distributionPaths: ["/*"],
+    });
 
     new cdk.CfnOutput(this, "ApiUrl", {
       value: api.url,
       description: "API Gateway URL — put this in background.js",
+    });
+
+    new cdk.CfnOutput(this, "DashboardUrl", {
+      value: `https://${distribution.distributionDomainName}`,
+      description: "Public backtest dashboard URL",
     });
   }
 }
