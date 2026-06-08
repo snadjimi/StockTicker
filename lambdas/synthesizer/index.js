@@ -194,11 +194,14 @@ exports.handler = async (event) => {
       fromCache: false,
     };
 
-    // ─── Persist: cache the brief + log a signal for backtesting ───────
-    await Promise.all([
-      cacheBrief(ticker, fetchedAt, brief),
-      logSignal(ticker, fetchedAt, brief),
-    ]);
+    // Skip persistence when price is missing (usually a rate-limited fetch)
+    // so the bad result isn't cached — the next request retries fresh.
+    if (f.price != null) {
+      await Promise.all([
+        cacheBrief(ticker, fetchedAt, brief),
+        logSignal(ticker, fetchedAt, brief),
+      ]);
+    }
 
     return brief;
   } catch (err) {
