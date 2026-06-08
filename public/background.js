@@ -26,7 +26,7 @@ function setCache(ticker, data) {
 // ─── API configuration ─────────────────────────────────────────────────
 // Replace this URL after deploying the AWS CDK stack (Phase 2).
 
-const API_BASE = "YOUR_API_GATEWAY_URL/prod";
+const API_BASE = "https://07rgqv2muc.execute-api.us-east-1.amazonaws.com/prod";
 
 // ─── Fetch brief from API (or mock) ────────────────────────────────────
 
