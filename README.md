@@ -166,11 +166,3 @@ npm run build   # bundles src/popup/App.jsx into public/popup.js
 2. Enable **Developer mode** (top right)
 3. Click **Load unpacked** and select the `public/` folder
 4. Visit a finance page and open the StockPulse popup
-
----
-
-## Notes
-
-- **Polygon free tier** allows ~5 calls/min. Open one ticker at a time; rapid lookups may briefly hit the limit.
-- **No backend auth.** The API URL is public. Fine for a personal demo, but add an API key or rate limiting before publishing the extension widely.
-- The dashboard shows real accuracy numbers only after predictions mature (seven days) and the grader has run.
