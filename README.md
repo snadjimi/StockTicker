@@ -7,13 +7,13 @@
 
 ---
 
-## Screenshots
+## In action
 
-> Add your own captures to `docs/` and they will render here.
+![StockPulse popup on a live stock page](docs/hero.png)
 
-| Extension popup | Backtest dashboard |
+| Full brief | Bull cases & risks |
 | --- | --- |
-| ![Popup](docs/popup.png) | ![Dashboard](docs/dashboard.png) |
+| ![Popup](docs/popup.png) | ![Analysis](docs/analysis.png) |
 
 ---
 
