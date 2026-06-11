@@ -1,4 +1,4 @@
-<div align="left">
+<div align="center">
   <img src="docs/logo.png" width="96" height="96" alt="StockPulse logo" />
   <h1>StockPulse</h1>
   <p><strong>AI-powered stock research at a glance.</strong></p>
