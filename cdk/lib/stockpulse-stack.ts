@@ -9,6 +9,11 @@ import * as s3 from "aws-cdk-lib/aws-s3";
 import * as cloudfront from "aws-cdk-lib/aws-cloudfront";
 import * as origins from "aws-cdk-lib/aws-cloudfront-origins";
 import * as s3deploy from "aws-cdk-lib/aws-s3-deployment";
+import * as cloudwatch from "aws-cdk-lib/aws-cloudwatch";
+import * as cwActions from "aws-cdk-lib/aws-cloudwatch-actions";
+import * as logs from "aws-cdk-lib/aws-logs";
+import * as sns from "aws-cdk-lib/aws-sns";
+import * as subscriptions from "aws-cdk-lib/aws-sns-subscriptions";
 import { Construct } from "constructs";
 
 export class StockPulseStack extends cdk.Stack {
@@ -206,6 +211,120 @@ export class StockPulseStack extends cdk.Stack {
       destinationBucket: dashboardBucket,
       distribution,
       distributionPaths: ["/*"],
+    });
+
+    const alertTopic = new sns.Topic(this, "AlertTopic", {
+      topicName: "stockpulse-alerts",
+      displayName: "StockPulse Alerts",
+    });
+
+    const alertEmail = this.node.tryGetContext("alertEmail");
+    if (alertEmail) {
+      alertTopic.addSubscription(new subscriptions.EmailSubscription(alertEmail));
+    }
+
+    const alarmAction = new cwActions.SnsAction(alertTopic);
+    const alarms: cloudwatch.Alarm[] = [];
+    const addAlarm = (id: string, props: cloudwatch.AlarmProps) => {
+      const alarm = new cloudwatch.Alarm(this, id, {
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+        ...props,
+      });
+      alarm.addAlarmAction(alarmAction);
+      alarms.push(alarm);
+      return alarm;
+    };
+
+    const monitoredFunctions: Record<string, lambda.Function> = {
+      Orchestrator: orchestrator,
+      NewsFetcher: newsFetcher,
+      FundamentalsFetcher: fundamentalsFetcher,
+      RedditFetcher: redditFetcher,
+      OptionsFetcher: optionsFetcher,
+      Synthesizer: synthesizer,
+      Grader: grader,
+      Stats: stats,
+    };
+
+    Object.entries(monitoredFunctions).forEach(([name, fn]) => {
+      addAlarm(`${name}ErrorsAlarm`, {
+        alarmName: `${fn.functionName}-errors`,
+        alarmDescription: `${name} Lambda threw an unhandled error`,
+        metric: fn.metricErrors({ statistic: "Sum", period: cdk.Duration.minutes(5) }),
+        threshold: 1,
+        evaluationPeriods: 1,
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      });
+
+      // Fetchers catch their own errors and only console.error, so the Errors metric never fires.
+      const logErrorFilter = new logs.MetricFilter(this, `${name}LogErrorFilter`, {
+        logGroup: fn.logGroup,
+        filterPattern: logs.FilterPattern.anyTerm("ERROR"),
+        metricNamespace: "StockPulse",
+        metricName: `${name}LogErrors`,
+        metricValue: "1",
+      });
+
+      addAlarm(`${name}LogErrorsAlarm`, {
+        alarmName: `${fn.functionName}-log-errors`,
+        alarmDescription: `${name} logged 3+ ERROR lines in 15 minutes`,
+        metric: logErrorFilter.metric({ statistic: "Sum", period: cdk.Duration.minutes(15) }),
+        threshold: 3,
+        evaluationPeriods: 1,
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      });
+    });
+
+    addAlarm("Api5xxAlarm", {
+      alarmName: "stockpulse-api-5xx",
+      alarmDescription: "API Gateway returned a 5XX response",
+      metric: api.metricServerError({ statistic: "Sum", period: cdk.Duration.minutes(5) }),
+      threshold: 1,
+      evaluationPeriods: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+    });
+
+    addAlarm("GraderNotRunningAlarm", {
+      alarmName: "stockpulse-grader-not-running",
+      alarmDescription: "Daily grader job has not run in the last 24 hours",
+      metric: grader.metricInvocations({ statistic: "Sum", period: cdk.Duration.hours(24) }),
+      threshold: 1,
+      evaluationPeriods: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.BREACHING,
+    });
+
+    new cloudwatch.Dashboard(this, "OpsDashboard", {
+      dashboardName: "stockpulse-ops",
+      widgets: [
+        [
+          new cloudwatch.GraphWidget({
+            title: "Lambda errors",
+            width: 12,
+            left: Object.entries(monitoredFunctions).map(([name, fn]) =>
+              fn.metricErrors({ statistic: "Sum", period: cdk.Duration.minutes(5), label: name })),
+          }),
+          new cloudwatch.GraphWidget({
+            title: "API requests vs 5XX",
+            width: 12,
+            left: [api.metricCount({ statistic: "Sum", period: cdk.Duration.minutes(5), label: "Requests" })],
+            right: [api.metricServerError({ statistic: "Sum", period: cdk.Duration.minutes(5), label: "5XX" })],
+          }),
+        ],
+        [
+          new cloudwatch.GraphWidget({
+            title: "Orchestrator duration (p90)",
+            width: 12,
+            left: [orchestrator.metricDuration({ statistic: "p90", period: cdk.Duration.minutes(5), label: "p90" })],
+          }),
+          new cloudwatch.AlarmStatusWidget({
+            title: "Alarm status",
+            width: 12,
+            height: 8,
+            alarms,
+          }),
+        ],
+      ],
     });
 
     new cdk.CfnOutput(this, "ApiUrl", {
