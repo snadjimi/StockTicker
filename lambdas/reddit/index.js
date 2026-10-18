@@ -7,6 +7,9 @@
 //
 // Returns the standard fetcher shape:
 //   { source, ticker, fetchedAt, data: { ... } }
+//
+// data.available is false when Reddit could not be queried (missing
+// credentials or an API error). Unavailable values are null, never 0.
 
 const { SSMClient, GetParameterCommand } = require("@aws-sdk/client-ssm");
 
@@ -28,6 +31,31 @@ async function getCreds() {
     clientSecret: secret.Parameter.Value,
   };
   return cachedCreds;
+}
+
+// Credentials still set to the CDK placeholder (or empty) — Reddit isn't set up.
+function credsConfigured({ clientId, clientSecret }) {
+  return [clientId, clientSecret].every((v) => v && v !== "REPLACE_ME");
+}
+
+// Missing credentials fail on every call, so warn once per container instead
+// of logging an error each time (that would trip the log-error alarm).
+let warnedNotConfigured = false;
+
+function unavailable(ticker, fetchedAt, error) {
+  return {
+    source: "reddit",
+    ticker,
+    fetchedAt,
+    data: {
+      redditMentions: null,
+      sentimentPolarity: null,
+      trending: null,
+      subreddits: null,
+      available: false,
+    },
+    error,
+  };
 }
 
 // ─── OAuth: get an app-only access token ───────────────────────────────
@@ -94,6 +122,14 @@ exports.handler = async (event) => {
   const fetchedAt = new Date().toISOString();
 
   try {
+    if (!credsConfigured(await getCreds())) {
+      if (!warnedNotConfigured) {
+        warnedNotConfigured = true;
+        console.warn("Reddit credentials are not configured (REPLACE_ME); Reddit data unavailable");
+      }
+      return unavailable(ticker, fetchedAt, "Reddit credentials not configured");
+    }
+
     const token = await getAccessToken();
 
     // Search both subreddits in parallel
@@ -129,21 +165,11 @@ exports.handler = async (event) => {
           wallstreetbets: wsb.length,
           investing: investing.length,
         },
+        available: true,
       },
     };
   } catch (err) {
     console.error("Reddit fetcher error:", err);
-    return {
-      source: "reddit",
-      ticker,
-      fetchedAt,
-      data: {
-        redditMentions: 0,
-        sentimentPolarity: 0.5,
-        trending: false,
-        subreddits: { wallstreetbets: 0, investing: 0 },
-      },
-      error: err.message,
-    };
+    return unavailable(ticker, fetchedAt, err.message);
   }
 };

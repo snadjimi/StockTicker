@@ -81,6 +81,7 @@ exports.handler = async (event) => {
         articleCount: articles.length,
         headlines: articles.slice(0, 5),
         aggregateSentiment: normalizedSentiment,
+        available: true,
       },
     };
   } catch (err) {
@@ -90,7 +91,7 @@ exports.handler = async (event) => {
       source: "news",
       ticker,
       fetchedAt,
-      data: { articleCount: 0, headlines: [], aggregateSentiment: 0 },
+      data: { articleCount: null, headlines: [], aggregateSentiment: null, available: false },
       error: err.message,
     };
   }

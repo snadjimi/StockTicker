@@ -4,6 +4,10 @@
 //
 // Returns the standard fetcher shape:
 //   { source, ticker, fetchedAt, data: { ... } }
+//
+// data.available is false when options data could not be fetched (for
+// example the snapshot endpoint isn't on our Polygon plan). Unavailable
+// values are null, never 0.
 
 const { SSMClient, GetParameterCommand } = require("@aws-sdk/client-ssm");
 
@@ -19,11 +23,22 @@ async function getApiKey() {
   return cachedApiKey;
 }
 
+// Thrown when Polygon says our plan can't access an endpoint (403).
+class PlanUnavailableError extends Error {}
+
 async function fetchJson(url) {
   const res = await fetch(url);
-  if (!res.ok) throw new Error(`Polygon returned ${res.status}`);
+  if (!res.ok) {
+    const message = `Polygon returned ${res.status}`;
+    if (res.status === 403) throw new PlanUnavailableError(message);
+    throw new Error(message);
+  }
   return res.json();
 }
+
+// Plan-restricted endpoints fail on every call, so warn once per container
+// instead of logging an error each time (that would trip the log-error alarm).
+let warnedPlanUnavailable = false;
 
 exports.handler = async (event) => {
   const ticker = event.ticker;
@@ -73,9 +88,10 @@ exports.handler = async (event) => {
     }
 
     // ─── Derived metrics ─────────────────────────────────────────────
+    // No volume at all means no signal, not a 0 ratio
     const callPutRatio = putVolume > 0
       ? +(callVolume / putVolume).toFixed(2)
-      : callVolume > 0 ? 99 : 0;
+      : callVolume > 0 ? 99 : null;
 
     const avgIv = ivCount > 0
       ? `${((ivSum / ivCount) * 100).toFixed(1)}%`
@@ -102,20 +118,29 @@ exports.handler = async (event) => {
         unusualNote,
         impliedVolatility: avgIv,
         contractsAnalyzed: contracts.length,
+        available: true,
       },
     };
   } catch (err) {
-    console.error("Options fetcher error:", err);
+    if (err instanceof PlanUnavailableError) {
+      if (!warnedPlanUnavailable) {
+        warnedPlanUnavailable = true;
+        console.warn(`Options snapshot unavailable on current Polygon plan: ${err.message}`);
+      }
+    } else {
+      console.error("Options fetcher error:", err);
+    }
     return {
       source: "options",
       ticker,
       fetchedAt,
       data: {
         callPutRatio: null,
-        unusualActivity: false,
-        unusualNote: "Options data unavailable",
+        unusualActivity: null,
+        unusualNote: null,
         impliedVolatility: null,
-        contractsAnalyzed: 0,
+        contractsAnalyzed: null,
+        available: false,
       },
       error: err.message,
     };

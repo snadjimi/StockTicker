@@ -88,6 +88,13 @@ const BriefAnalysisSchema = z.object({
 // ─── Build the prompt from the 4 fetcher results ────────────────────────
 // We hand Claude a clean, compact view of the data and ask it to reason.
 
+// A source is unavailable when its fetcher says so (or returned nothing).
+function isAvailable(source) {
+  return Boolean(source?.data) && source.data.available !== false;
+}
+
+const UNAVAILABLE = "unavailable";
+
 function buildUserPrompt(ticker, news, fundamentals, reddit, options) {
   // Pull the inner `data` blobs (each fetcher wraps its payload in `.data`)
   const f = fundamentals?.data || {};
@@ -95,28 +102,60 @@ function buildUserPrompt(ticker, news, fundamentals, reddit, options) {
   const r = reddit?.data || {};
   const o = options?.data || {};
 
+  const priceOk = isAvailable(fundamentals) && f.price != null;
+  const financialsOk =
+    Boolean(fundamentals?.data) && (f.financialsAvailable ?? f.available) !== false;
+  const asOf = priceOk ? f.asOf : null;
+  const headlines = (n.headlines || [])
+    .slice(0, 5)
+    .map((h) => (typeof h === "string" ? h : h.title))
+    .filter(Boolean);
+
   return [
     `Analyze the stock ${ticker} using the data below and produce an investment brief.`,
     ``,
-    `## Fundamentals`,
-    `Price: ${f.price ?? "n/a"} (change ${f.change ?? 0}, ${f.changePct ?? 0}%)`,
-    `P/E: ${f.pe ?? "n/a"} | EPS: ${f.eps ?? "n/a"} | Margin: ${f.margin ?? "n/a"}`,
-    `Revenue growth: ${f.revenueGrowth ?? "n/a"} | Debt ratio: ${f.debtRatio ?? "n/a"}`,
+    `## Price`,
+    priceOk
+      ? `Close on ${asOf ?? "the latest trading day"}: ${f.price} ` +
+        `(change vs previous close ${f.change ?? "n/a"}, ${f.changePct ?? "n/a"}%)`
+      : `Price: ${UNAVAILABLE}`,
     ``,
-    `## News (last 24h)`,
-    `Articles: ${n.articleCount ?? 0} | Aggregate sentiment (-1..1): ${n.aggregateSentiment ?? 0}`,
-    `Headlines: ${(n.headlines || []).slice(0, 5).join(" | ") || "none"}`,
+    `## Fundamentals`,
+    financialsOk
+      ? [
+          `P/E: ${f.pe ?? "n/a"} | EPS: ${f.eps ?? "n/a"} | Margin: ${f.margin ?? "n/a"}`,
+          `Revenue growth: ${f.revenueGrowth ?? "n/a"} | Debt ratio: ${f.debtRatio ?? "n/a"}`,
+        ].join("\n")
+      : `Financials: ${UNAVAILABLE}`,
+    ``,
+    `## News (most recent articles)`,
+    isAvailable(news)
+      ? [
+          `Articles: ${n.articleCount ?? 0} | Aggregate sentiment (-1..1): ${n.aggregateSentiment ?? 0}`,
+          `Headlines: ${headlines.join(" | ") || "none"}`,
+        ].join("\n")
+      : `News: ${UNAVAILABLE}`,
     ``,
     `## Reddit buzz`,
-    `Mentions: ${r.redditMentions ?? 0} | Polarity (0..1): ${r.sentimentPolarity ?? 0.5} | Trending: ${r.trending ?? false}`,
+    isAvailable(reddit)
+      ? `Mentions: ${r.redditMentions} | Polarity (0..1): ${r.sentimentPolarity} | Trending: ${r.trending}`
+      : `Reddit: ${UNAVAILABLE}`,
     ``,
     `## Options activity`,
-    `Call/Put ratio: ${o.callPutRatio ?? "n/a"} | Implied vol: ${o.impliedVolatility ?? "n/a"}`,
-    `Unusual activity: ${o.unusualActivity ?? false} — ${o.unusualNote ?? "none"}`,
+    isAvailable(options)
+      ? [
+          `Call/Put ratio: ${o.callPutRatio ?? "n/a"} | Implied vol: ${o.impliedVolatility ?? "n/a"}`,
+          `Unusual activity: ${o.unusualActivity ?? false} — ${o.unusualNote ?? "none"}`,
+        ].join("\n")
+      : `Options: ${UNAVAILABLE}`,
     ``,
     `Weigh these signals against each other. A high P/E is a risk even when`,
     `momentum is strong. Confirmation across sources (e.g. retail buzz + call`,
     `buying) raises confidence. Be specific and avoid generic filler.`,
+    `If a data source is unavailable, do not treat it as a signal or infer anything from it.`,
+    asOf
+      ? `Price data is as of ${asOf}. Refer to that date, not "today".`
+      : `Do not describe price moves as happening "today".`,
   ].join("\n");
 }
 
@@ -126,16 +165,56 @@ const SYSTEM_PROMPT =
   "single coherent view. You are honest about uncertainty and never invent " +
   "numbers — reason only from the data provided.";
 
+// ─── Deterministic brief fields ─────────────────────────────────────────
+// Numbers copied straight from the fetchers, no AI. The popup calls
+// change.toFixed() and redditMentions.toLocaleString(), so those stay numeric;
+// each section's `available` flag says whether its values are real.
+
+function deterministicFields(fundamentals, reddit, options) {
+  const f = fundamentals?.data || {};
+  const r = reddit?.data || {};
+  const o = options?.data || {};
+  const redditOk = isAvailable(reddit);
+  const optionsOk = isAvailable(options);
+
+  return {
+    price: f.price ?? null,
+    change: f.change ?? 0,
+    changePct: f.changePct ?? 0,
+    asOf: f.asOf ?? null, // trading day the price is from
+    fundamentals: {
+      pe: f.pe ?? null,
+      eps: f.eps ?? null,
+      revenueGrowth: f.revenueGrowth ?? null,
+      margin: f.margin ?? null,
+      debtRatio: f.debtRatio ?? null,
+      available: Boolean(fundamentals?.data) && (f.financialsAvailable ?? f.available) !== false,
+    },
+    social: {
+      redditMentions: r.redditMentions ?? 0,
+      // 30-day baseline not tracked yet (future work)
+      mentionChange: redditOk ? "n/a" : UNAVAILABLE,
+      sentimentPolarity: r.sentimentPolarity ?? null,
+      trending: r.trending ?? false,
+      available: redditOk,
+    },
+    options: {
+      callPutRatio: o.callPutRatio ?? null,
+      unusualActivity: o.unusualActivity ?? false,
+      unusualNote: o.unusualNote ?? (optionsOk ? "No unusual activity detected" : "Options data unavailable"),
+      impliedVolatility: o.impliedVolatility ?? null,
+      available: optionsOk,
+    },
+  };
+}
+
 // ─── Main handler ───────────────────────────────────────────────────────
 
 exports.handler = async (event) => {
   const { ticker, news, fundamentals, reddit, options } = event;
   const fetchedAt = new Date().toISOString();
 
-  // Deterministic fields — copied straight from the fetchers, no AI.
-  const f = fundamentals?.data || {};
-  const r = reddit?.data || {};
-  const o = options?.data || {};
+  const fields = deterministicFields(fundamentals, reddit, options);
 
   try {
     const client = await getClient();
@@ -163,32 +242,11 @@ exports.handler = async (event) => {
     const brief = {
       ticker,
       name: ai.name,
-      price: f.price ?? null,
-      change: f.change ?? 0,
-      changePct: f.changePct ?? 0,
+      ...fields,
       sentiment: ai.sentiment,
       summary: ai.summary,
       risks: ai.risks,
       bullCases: ai.bullCases,
-      fundamentals: {
-        pe: f.pe ?? null,
-        eps: f.eps ?? null,
-        revenueGrowth: f.revenueGrowth ?? null,
-        margin: f.margin ?? null,
-        debtRatio: f.debtRatio ?? null,
-      },
-      social: {
-        redditMentions: r.redditMentions ?? 0,
-        mentionChange: "n/a", // 30-day baseline not tracked yet (future work)
-        sentimentPolarity: r.sentimentPolarity ?? 0.5,
-        trending: r.trending ?? false,
-      },
-      options: {
-        callPutRatio: o.callPutRatio ?? null,
-        unusualActivity: o.unusualActivity ?? false,
-        unusualNote: o.unusualNote ?? "No unusual activity detected",
-        impliedVolatility: o.impliedVolatility ?? null,
-      },
       signals: ai.signals,
       cachedAt: fetchedAt,
       fromCache: false,
@@ -196,7 +254,7 @@ exports.handler = async (event) => {
 
     // Skip persistence when price is missing (usually a rate-limited fetch)
     // so the bad result isn't cached — the next request retries fresh.
-    if (f.price != null) {
+    if (fields.price != null) {
       await Promise.all([
         cacheBrief(ticker, fetchedAt, brief),
         logSignal(ticker, fetchedAt, brief),
@@ -211,32 +269,11 @@ exports.handler = async (event) => {
     return {
       ticker,
       name: `${ticker}`,
-      price: f.price ?? null,
-      change: f.change ?? 0,
-      changePct: f.changePct ?? 0,
+      ...fields,
       sentiment: { label: "Neutral", score: 50, confidence: "low" },
       summary: "AI analysis is temporarily unavailable. Showing raw data only.",
       risks: [],
       bullCases: [],
-      fundamentals: {
-        pe: f.pe ?? null,
-        eps: f.eps ?? null,
-        revenueGrowth: f.revenueGrowth ?? null,
-        margin: f.margin ?? null,
-        debtRatio: f.debtRatio ?? null,
-      },
-      social: {
-        redditMentions: r.redditMentions ?? 0,
-        mentionChange: "n/a",
-        sentimentPolarity: r.sentimentPolarity ?? 0.5,
-        trending: r.trending ?? false,
-      },
-      options: {
-        callPutRatio: o.callPutRatio ?? null,
-        unusualActivity: o.unusualActivity ?? false,
-        unusualNote: o.unusualNote ?? "No unusual activity detected",
-        impliedVolatility: o.impliedVolatility ?? null,
-      },
       signals: [{ type: "neutral", text: "Insufficient data for signal" }],
       cachedAt: fetchedAt,
       fromCache: false,

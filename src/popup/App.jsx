@@ -467,17 +467,24 @@ function App() {
                 >
                   {money(brief.price)}
                 </div>
-                <div
-                  style={{
-                    fontSize: "12px",
-                    fontFamily: "'DM Mono', monospace",
-                    color: brief.changePct >= 0 ? colors.green : colors.red,
-                  }}
-                >
-                  {brief.changePct >= 0 ? "+" : ""}
-                  {brief.change.toFixed(2)} ({brief.changePct >= 0 ? "+" : ""}
-                  {brief.changePct.toFixed(2)}%)
-                </div>
+                {brief.price != null && (
+                  <div
+                    style={{
+                      fontSize: "12px",
+                      fontFamily: "'DM Mono', monospace",
+                      color: brief.changePct >= 0 ? colors.green : colors.red,
+                    }}
+                  >
+                    {brief.changePct >= 0 ? "+" : ""}
+                    {brief.change.toFixed(2)} ({brief.changePct >= 0 ? "+" : ""}
+                    {brief.changePct.toFixed(2)}%)
+                  </div>
+                )}
+                {brief.asOf && (
+                  <div style={{ fontSize: "10px", color: colors.textSecondary }}>
+                    as of {brief.asOf}
+                  </div>
+                )}
               </div>
             </div>
 
@@ -540,7 +547,11 @@ function App() {
 
               {/* Social buzz card */}
               <Card title="Social Buzz" delay={0.25}>
-                <DataRow label="Reddit" value={brief.social.redditMentions.toLocaleString()} mono />
+                <DataRow
+                  label="Reddit"
+                  value={brief.social.available === false ? DASH : brief.social.redditMentions.toLocaleString()}
+                  mono
+                />
                 <DataRow label="vs Avg" value={brief.social.mentionChange} mono />
                 <DataRow
                   label="Trending"
