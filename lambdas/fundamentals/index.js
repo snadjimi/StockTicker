@@ -22,7 +22,10 @@ async function getApiKey() {
 // Helper: fetch JSON or throw
 async function fetchJson(url) {
   const res = await fetch(url);
-  if (!res.ok) throw new Error(`Polygon returned ${res.status} for ${url}`);
+  if (!res.ok) {
+    const path = new URL(url).pathname; // never log the apiKey query param
+    throw new Error(`Polygon returned ${res.status} for ${path}`);
+  }
   return res.json();
 }
 
@@ -44,11 +47,18 @@ exports.handler = async (event) => {
     const changePct = prevClose ? (change / prevClose) * 100 : 0;
 
     // ─── 2. Financials (income statement, balance sheet) ─────────────
+    // Best-effort: if this fails we still return the price, so the brief
+    // and its prediction are not lost along with the financials.
     const finUrl =
       `https://api.polygon.io/vX/reference/financials` +
       `?ticker=${ticker}&limit=2&timeframe=annual&apiKey=${apiKey}`;
-    const finJson = await fetchJson(finUrl);
-    const reports = finJson.results || [];
+    let reports = [];
+    try {
+      const finJson = await fetchJson(finUrl);
+      reports = finJson.results || [];
+    } catch (err) {
+      console.error("Fundamentals fetcher error (financials):", err);
+    }
     const latest = reports[0]?.financials || {};
     const prior = reports[1]?.financials || {};
 
